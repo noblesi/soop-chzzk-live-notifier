@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SOOP/CHZZK Live Notifier - 옵션</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+    input, select, button { padding:8px; }
+    input[type="number"] { width: 100px; }
+    table { width:100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align:left; vertical-align: top; }
+    .muted { color:#666; font-size: 12px; }
+    .section { margin-top: 18px; padding-top: 12px; border-top: 1px solid #eee; }
+    .right { margin-left: auto; }
+    code { background: #f5f5f5; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>라이브 알림 설정</h1>
+
+  <div class="row">
+    <label>플랫폼</label>
+    <select id="platform">
+      <option value="chzzk">치지직</option>
+      <option value="soop">SOOP</option>
+    </select>
+
+    <label>채널/아이디(또는 URL)</label>
+    <input id="channelId" placeholder="예) 채널ID 또는 전체 URL 붙여넣기" size="44" />
+
+    <label>표시 이름(선택)</label>
+    <input id="displayName" placeholder="예) 스트리머 닉네임" size="22" />
+
+    <button id="addBtn">추가</button>
+    <button id="pollNowBtn" class="right">지금 체크</button>
+  </div>
+
+  <p class="muted">
+    치지직: <code>https://chzzk.naver.com/live/&lt;channelId&gt;</code> 또는 <code>https://chzzk.naver.com/&lt;channelId&gt;</code><br/>
+    SOOP: <code>https://play.sooplive.co.kr/&lt;bjid&gt;</code> 또는 <code>https://www.sooplive.co.kr/station/&lt;bjid&gt;</code>
+  </p>
+
+  <div class="section">
+    <h2>동작 설정</h2>
+    <div class="row">
+      <label>체크 주기(분)</label>
+      <input id="pollIntervalMin" type="number" min="1" max="60" />
+
+      <label>중복 알림 쿨다운(분)</label>
+      <input id="cooldownMin" type="number" min="0" max="1440" />
+
+      <label>
+        <input id="notifyIfAlreadyLive" type="checkbox" />
+        이미 라이브면(처음/재시작 시)도 알림
+      </label>
+
+      <button id="saveSettingsBtn">설정 저장</button>
+      <button id="testNotifBtn">테스트 알림</button>
+      <span id="status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>감시 목록</h2>
+    <table>
+      <thead>
+        <tr><th>플랫폼</th><th>ID</th><th>이름</th><th></th></tr>
+      </thead>
+      <tbody id="list"></tbody>
+    </table>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

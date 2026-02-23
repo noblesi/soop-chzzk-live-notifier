@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Live Notifier</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 12px; width: 360px; }
+    .row { display:flex; gap:8px; align-items:center; }
+    button { padding: 8px; }
+    .muted { color:#666; font-size: 12px; }
+    ul { padding-left: 18px; }
+    li { margin: 6px 0; }
+    .tag { display:inline-block; padding: 2px 6px; border-radius: 6px; background:#f3f3f3; font-size: 12px; margin-left: 6px; }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <button id="pollNow">지금 체크</button>
+    <a id="openOptions" href="#">옵션</a>
+    <span id="summary" class="muted"></span>
+  </div>
+
+  <h3 style="margin: 10px 0 6px;">감시 목록</h3>
+  <ul id="list"></ul>
+
+  <script src="popup.js"></script>
+</body>
+</html>
