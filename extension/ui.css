@@ -1,0 +1,232 @@
+:root{
+  --bg:#0b1020;
+  --bg2:#0f1730;
+  --card:rgba(255,255,255,.055);
+  --border:rgba(255,255,255,.12);
+  --text:#f5f7ff;
+  --muted:#a8b0d6;
+  --accent:#4cc9f0;
+  --danger:#ff4c6e;
+  --shadow:0 14px 40px rgba(0,0,0,.35);
+}
+
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+
+body{
+  margin:0;
+  padding:16px;
+  color:var(--text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: radial-gradient(1200px 600px at 20% 0%, var(--bg2) 0%, var(--bg) 55%);
+}
+
+a{ color:var(--accent); text-decoration:none; }
+a:hover{ text-decoration:underline; }
+
+.container{ max-width:980px; margin:0 auto; }
+
+.header{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin-bottom:14px;
+}
+
+.header img{
+  width:32px;
+  height:32px;
+  border-radius:10px;
+  box-shadow: 0 10px 22px rgba(0,0,0,.35);
+}
+
+.header .title{
+  font-size:18px;
+  font-weight:800;
+  line-height:1.1;
+}
+
+.header .subtitle{
+  margin-top:2px;
+  font-size:12px;
+  color:var(--muted);
+}
+
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:14px;
+  box-shadow:var(--shadow);
+}
+
+.card + .card{ margin-top:12px; }
+
+.row{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  align-items:center;
+}
+
+label{
+  font-size:12px;
+  color:var(--muted);
+}
+
+input, select{
+  background:rgba(255,255,255,.06);
+  border:1px solid var(--border);
+  color:var(--text);
+  padding:10px 10px;
+  border-radius:12px;
+  outline:none;
+}
+
+input::placeholder{ color:rgba(168,176,214,.7); }
+
+input:focus, select:focus{
+  border-color:rgba(76,201,240,.65);
+  box-shadow:0 0 0 3px rgba(76,201,240,.14);
+}
+
+button{
+  background:rgba(255,255,255,.08);
+  border:1px solid var(--border);
+  color:var(--text);
+  padding:10px 12px;
+  border-radius:12px;
+  cursor:pointer;
+}
+
+button.primary{
+  background:rgba(76,201,240,.18);
+  border-color:rgba(76,201,240,.52);
+}
+
+button.danger{
+  background:rgba(255,76,110,.14);
+  border-color:rgba(255,76,110,.55);
+}
+
+button:hover{ filter:brightness(1.06); }
+
+.muted{ color:var(--muted); font-size:12px; }
+.small{ font-size:12px; padding:8px 10px; }
+
+code{
+  background:rgba(0,0,0,.20);
+  border:1px solid rgba(255,255,255,.08);
+  padding:2px 6px;
+  border-radius:8px;
+}
+
+.table{ width:100%; border-collapse:collapse; margin-top:10px; }
+.table th, .table td{
+  border-bottom:1px solid rgba(255,255,255,.10);
+  padding:10px;
+  text-align:left;
+  vertical-align:top;
+}
+.table th{ color:var(--muted); font-size:12px; font-weight:700; }
+
+.pill{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:2px 10px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  font-size:12px;
+  color:var(--muted);
+  background:rgba(255,255,255,.04);
+  white-space:nowrap;   /* ✅ "치지직" 같은 텍스트가 세로로 깨지는 것 방지 */
+  flex-shrink:0;        /* ✅ 좁아질 때 pill이 찌그러지지 않게 */
+}
+.pill .dot{ width:8px; height:8px; border-radius:999px; background:var(--muted); }
+
+.pill.chzzk{
+  color:#a3c7ff;
+  border-color:rgba(163,199,255,.33);
+  background:rgba(163,199,255,.08);
+}
+.pill.chzzk .dot{ background:#a3c7ff; }
+
+.pill.soop{
+  color:#b7f7d6;
+  border-color:rgba(183,247,214,.33);
+  background:rgba(183,247,214,.08);
+}
+.pill.soop .dot{ background:#b7f7d6; }
+
+.status{
+  font-weight:900;
+  font-size:12px;
+  padding:4px 10px;
+  border-radius:999px;
+  border:1px solid var(--border);
+}
+.status.live{
+  color:var(--text);
+  background:rgba(255,76,110,.22);
+  border-color:rgba(255,76,110,.55);
+}
+.status.off{
+  color:var(--muted);
+  background:rgba(255,255,255,.05);
+}
+
+.item{
+  padding:10px;
+  border:1px solid rgba(255,255,255,.10);
+  border-radius:14px;
+  background:rgba(0,0,0,.10);
+}
+.item + .item{ margin-top:10px; }
+.item-top{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+/* ✅ 왼쪽 영역(이름+플랫폼 pill)이 좁아져도 ellipsis가 잘 동작하도록 */
+.item-left{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+  flex:1;
+}
+
+.item-name{
+  min-width:0;
+  flex:1;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.item-title{ margin-top:6px; font-size:13px; opacity:.95; }
+
+/* ✅ 방송 제목이 길면 2줄까지만 보여주고 잘라냄 */
+.item-title{
+  /* 표준(지원되는 브라우저에서 우선 적용) */
+  display: box;
+  box-orient: vertical;
+  line-clamp: 2;
+
+  /* WebKit(Chrome/Edge 등) */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+
+  overflow: hidden;
+}
+.item-meta{
+  margin-top:6px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  font-size:12px;
+  color:var(--muted);
+}

@@ -1,5 +1,24 @@
 const $ = (id) => document.getElementById(id);
 
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function platformLabel(platform) {
+  return platform === "chzzk" ? "치지직" : platform === "soop" ? "SOOP" : platform;
+}
+
+function buildDefaultUrl(item) {
+  if (item.platform === "chzzk") return `https://chzzk.naver.com/live/${item.id}`;
+  if (item.platform === "soop") return `https://play.sooplive.co.kr/${item.id}`;
+  return "https://www.google.com";
+}
+
 function formatTime(ts) {
   if (!ts) return "";
   const d = new Date(ts);
@@ -8,9 +27,8 @@ function formatTime(ts) {
 
 async function render() {
   const { watchlist = [], state = {} } = await chrome.storage.local.get(["watchlist", "state"]);
-
-  const ul = $("list");
-  ul.innerHTML = "";
+  const root = $("list");
+  root.innerHTML = "";
 
   let liveCount = 0;
 
@@ -19,22 +37,47 @@ async function render() {
     const isLive = !!st?.lastIsLive;
     if (isLive) liveCount += 1;
 
-    const li = document.createElement("li");
     const name = item.name || item.id;
+    const title = st?.lastTitle || "";
+    const updated = st?.updatedAt ? `업데이트 ${formatTime(st.updatedAt)}` : "";
+    const url = buildDefaultUrl(item);
 
-    li.innerHTML = `
-      <strong>${name}</strong>
-      <span class="tag">${item.platform}</span>
-      <span class="tag">${isLive ? "LIVE" : "OFF"}</span>
-      <div class="muted">${st?.lastTitle ? st.lastTitle : ""}</div>
-      <div class="muted">${st?.updatedAt ? `업데이트 ${formatTime(st.updatedAt)}` : ""}</div>
+    const div = document.createElement("div");
+    div.className = "item";
+
+    div.innerHTML = `
+      <div class="item-top">
+        <div class="item-left">
+          <strong class="item-name">${escapeHtml(name)}</strong>
+          <span class="pill ${escapeHtml(item.platform)}">
+            <span class="dot"></span>${escapeHtml(platformLabel(item.platform))}
+          </span>
+        </div>
+        <span class="status ${isLive ? "live" : "off"}">${isLive ? "LIVE" : "OFF"}</span>
+      </div>
+
+      ${title ? `<div class="item-title">${escapeHtml(title)}</div>` : ""}
+
+      <div class="item-meta">
+        <span>${escapeHtml(updated)}</span>
+        <a href="#" data-open="${escapeHtml(url)}">열기</a>
+      </div>
     `;
-    ul.appendChild(li);
+
+    root.appendChild(div);
   }
 
   $("summary").textContent = watchlist.length
     ? `(${liveCount}/${watchlist.length} LIVE)`
     : "(등록된 채널 없음)";
+
+  root.querySelectorAll("a[data-open]").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const url = a.getAttribute("data-open");
+      if (url) chrome.tabs.create({ url });
+    });
+  });
 }
 
 async function pollNow() {
@@ -50,7 +93,8 @@ async function pollNow() {
 }
 
 $("pollNow").addEventListener("click", pollNow);
-$("openOptions").addEventListener("click", async (e) => {
+
+$("openOptions").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
 });

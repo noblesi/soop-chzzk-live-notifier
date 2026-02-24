@@ -3,7 +3,15 @@
   "name": "SOOP/CHZZK Live Notifier",
   "version": "0.2.0",
   "description": "Notify when selected SOOP / CHZZK streamers go live.",
-  "action": { "default_popup": "popup.html", "default_icon": {"16": "icon.png", "48": "icon.png", "128": "icon.png"} },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
   "options_page": "options.html",
   "background": { "service_worker": "service_worker.js" },
   "permissions": ["storage", "alarms", "notifications"],
@@ -15,9 +23,9 @@
     "https://play.sooplive.co.kr/*"
   ],
   "icons": {
-  "16": "icon.png",
-  "48": "icon.png",
-  "128": "icon.png"
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   }
 }
-

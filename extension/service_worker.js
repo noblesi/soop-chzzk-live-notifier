@@ -346,7 +346,7 @@ async function fetchSoop(streamerId) {
 
 async function notify({ title, message, url }) {
   const notificationId = `live:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-  const iconUrl = "icon.png";
+  chrome.runtime.getURL("icons/icon128.png");
 
   const createdId = await new Promise((resolve) => {
     chrome.notifications.create(
