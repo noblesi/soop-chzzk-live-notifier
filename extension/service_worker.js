@@ -135,7 +135,7 @@ async function pollAll({ reason }) {
     checked += 1;
 
     const prev = state[item.key]; // 없으면 undefined
-    const status = await safeFetchStatus(item, settings);
+    const status = await safeFetchStatus(item, settings, prev);
 
     if (status.isLive) liveNow += 1;
 
@@ -223,7 +223,7 @@ function computeTransition({ prev, status, settings, reason }) {
   return { shouldNotify: false };
 }
 
-async function safeFetchStatus(item, settings) {
+async function safeFetchStatus(item, settings, prev) {
   try {
     const result = await withTimeout(fetchStatus(item), settings.requestTimeoutMs);
 
@@ -246,9 +246,10 @@ async function safeFetchStatus(item, settings) {
       id: item.id,
       key: item.key,
       displayName: item.name || "",
-      isLive: false,
-      title: "",
-      signature: "UNKNOWN",
+      // 실패 시 이전 상태 유지(중복 알림 방지)
+      isLive: !!prev?.lastIsLive,
+      title: prev?.lastTitle || "",
+      signature: prev?.lastSig || "UNKNOWN",
       url: buildDefaultUrl(item)
     };
   }
@@ -345,7 +346,7 @@ async function fetchSoop(streamerId) {
 
 async function notify({ title, message, url }) {
   const notificationId = `live:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-  const iconUrl = "icon.png"
+  const iconUrl = "icon.png";
 
   const createdId = await new Promise((resolve) => {
     chrome.notifications.create(
