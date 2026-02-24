@@ -1,21 +1,37 @@
-/* SOOP/CHZZK Live Notifier - MV3 service worker */
+/* SOOP/CHZZK Live Notifier - MV3 service worker
+ * - chrome.alarms 기반 주기 폴링
+ * - 오프라인 -> 라이브 전환에서만 알림
+ * - 중복 알림 방지(쿨다운 + signature)
+ * - 알림 아이콘: 스트리머 프로필(가능하면) / 실패 시 기본 아이콘 폴백
+ * - 폴링 지연 축소: 동시 처리(동시성 제한) + 요청 타임아웃 단축
+ */
 
 const ALARM_NAME = "poll_live_status";
 
 const DEFAULT_SETTINGS = {
-  pollIntervalMin: 1,          // Chrome alarms: 1분 단위 권장
-  cooldownMin: 10,             // 같은 방송(같은 signature) 중복 알림 쿨다운
+  pollIntervalMin: 1,          // 1~60
+  cooldownMin: 10,             // 0~1440
   notifyIfAlreadyLive: false,  // 최초/재시작 시 이미 라이브면 알림 여부
-  requestTimeoutMs: 8000
+  requestTimeoutMs: 5000,      // ✅ 지연 줄이기: 기본 5초
 };
 
 const STORAGE_KEYS = {
   watchlist: "watchlist",
   settings: "settings",
-  state: "state",          // key -> { lastIsLive, lastSig, lastTitle, updatedAt }
-  notified: "notified",    // key -> { lastNotifiedSig, lastNotifiedAt }
-  notifMap: "notifMap"     // notificationId -> { url }
+  state: "state",         // key -> { lastIsLive, lastSig, lastTitle, updatedAt }
+  notified: "notified",   // key -> { lastNotifiedSig, lastNotifiedAt }
+  notifMap: "notifMap",   // notificationId -> { url }
+  avatarCache: "avatarCache", // key -> { url, fetchedAt }
 };
+
+const DEFAULT_ICON_URL = chrome.runtime.getURL("icons/icon128.png");
+const AVATAR_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// ✅ 폴링 동시성(너무 높이면 API에 부담)
+const POLL_CONCURRENCY = 4;
+
+// ✅ storage.notifMap 동시 업데이트 덮어쓰기 방지용 간단 mutex
+let notifMapMutex = Promise.resolve();
 
 function clampInt(n, min, max) {
   const x = Number.parseInt(String(n), 10);
@@ -28,7 +44,7 @@ function sleep(ms) {
 }
 
 async function getSettings() {
-  const { settings } = await chrome.storage.local.get([STORAGE_KEYS.settings]);
+  const { [STORAGE_KEYS.settings]: settings } = await chrome.storage.local.get([STORAGE_KEYS.settings]);
   return { ...DEFAULT_SETTINGS, ...(settings || {}) };
 }
 
@@ -47,8 +63,6 @@ async function setSettings(next) {
 async function ensureAlarm() {
   const settings = await getSettings();
   const period = clampInt(settings.pollIntervalMin, 1, 60);
-
-  // 기존 알람 갱신 (period 변경 반영)
   await chrome.alarms.clear(ALARM_NAME);
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: period });
 }
@@ -87,7 +101,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         await notify({
           title: "테스트 알림",
           message: "알림이 정상 동작합니다.",
-          url: "https://www.google.com"
+          url: "https://www.google.com",
+          iconUrl: DEFAULT_ICON_URL,
         });
         sendResponse({ ok: true });
         return;
@@ -99,66 +114,55 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
   })();
 
-  return true; // async
+  return true; // async response
 });
 
 chrome.notifications.onClicked.addListener(async (notificationId) => {
-  const { notifMap = {} } = await chrome.storage.local.get([STORAGE_KEYS.notifMap]);
-  const entry = notifMap[notificationId];
-  if (entry?.url) {
-    chrome.tabs.create({ url: entry.url });
-  }
-  delete notifMap[notificationId];
-  await chrome.storage.local.set({ [STORAGE_KEYS.notifMap]: notifMap });
+  const entry = await getNotifMapEntry(notificationId);
+  if (entry?.url) chrome.tabs.create({ url: entry.url });
+  await deleteNotifMapEntry(notificationId);
 });
 
 chrome.notifications.onClosed.addListener(async (notificationId) => {
-  const { notifMap = {} } = await chrome.storage.local.get([STORAGE_KEYS.notifMap]);
-  if (notifMap[notificationId]) {
-    delete notifMap[notificationId];
-    await chrome.storage.local.set({ [STORAGE_KEYS.notifMap]: notifMap });
-  }
+  await deleteNotifMapEntry(notificationId);
 });
 
 async function pollAll({ reason }) {
   const settings = await getSettings();
-  const { watchlist = [] } = await chrome.storage.local.get([STORAGE_KEYS.watchlist]);
 
-  const { state = {} } = await chrome.storage.local.get([STORAGE_KEYS.state]);
-  const { notified = {} } = await chrome.storage.local.get([STORAGE_KEYS.notified]);
+  const [
+    { [STORAGE_KEYS.watchlist]: watchlist = [] },
+    { [STORAGE_KEYS.state]: state = {} },
+    { [STORAGE_KEYS.notified]: notified = {} },
+    { [STORAGE_KEYS.avatarCache]: avatarCache = {} },
+  ] = await Promise.all([
+    chrome.storage.local.get([STORAGE_KEYS.watchlist]),
+    chrome.storage.local.get([STORAGE_KEYS.state]),
+    chrome.storage.local.get([STORAGE_KEYS.notified]),
+    chrome.storage.local.get([STORAGE_KEYS.avatarCache]),
+  ]);
 
-  let checked = 0;
-  let liveNow = 0;
-  let notifiedCount = 0;
+  const t0 = Date.now();
 
-  for (const item of watchlist) {
-    checked += 1;
-
-    const prev = state[item.key]; // 없으면 undefined
+  const results = await mapPool(watchlist, POLL_CONCURRENCY, async (item) => {
+    const prev = state[item.key];
     const status = await safeFetchStatus(item, settings, prev);
 
-    if (status.isLive) liveNow += 1;
+    let didNotify = false;
 
-    const transition = computeTransition({
-      prev,
-      status,
-      settings,
-      reason
-    });
-
+    const transition = computeTransition({ prev, status, settings });
     if (transition.shouldNotify) {
-      const can = canNotify(item.key, status.signature, notified, settings);
-      if (can) {
+      if (canNotify(item.key, status.signature, notified, settings)) {
+        const avatarIconUrl = await getAvatarIconUrl(item, avatarCache);
         await notify({
           title: transition.title,
           message: transition.message,
-          url: status.url
+          url: status.url,
+          iconUrl: avatarIconUrl || DEFAULT_ICON_URL,
         });
-        notified[item.key] = {
-          lastNotifiedSig: status.signature,
-          lastNotifiedAt: Date.now()
-        };
-        notifiedCount += 1;
+
+        notified[item.key] = { lastNotifiedSig: status.signature, lastNotifiedAt: Date.now() };
+        didNotify = true;
       }
     }
 
@@ -166,17 +170,26 @@ async function pollAll({ reason }) {
       lastIsLive: status.isLive,
       lastSig: status.signature,
       lastTitle: status.title || "",
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
 
-    // 너무 빠른 연속 요청 방지(가벼운 딜레이)
-    await sleep(250);
-  }
+    return { isLive: status.isLive, didNotify };
+  });
+
+  const checked = watchlist.length;
+  const liveNow = results.filter((r) => r?.isLive).length;
+  const notifiedCount = results.filter((r) => r?.didNotify).length;
 
   await chrome.storage.local.set({
     [STORAGE_KEYS.state]: state,
-    [STORAGE_KEYS.notified]: notified
+    [STORAGE_KEYS.notified]: notified,
+    [STORAGE_KEYS.avatarCache]: avatarCache,
   });
+
+  console.log(
+    `[poll] reason=${reason} checked=${checked} live=${liveNow} notified=${notifiedCount} ` +
+      `in ${Date.now() - t0}ms (timeout=${settings.requestTimeoutMs}ms, concurrency=${POLL_CONCURRENCY})`
+  );
 
   return { checked, liveNow, notified: notifiedCount };
 }
@@ -186,17 +199,16 @@ function canNotify(key, sig, notified, settings) {
   const n = notified[key];
   if (!n) return true;
 
-  // 같은 signature(같은 방송으로 추정)에서 쿨다운 내 재알림 방지
   if (n.lastNotifiedSig === sig && cooldownMs > 0) {
     return Date.now() - (n.lastNotifiedAt || 0) >= cooldownMs;
   }
   return true;
 }
 
-function computeTransition({ prev, status, settings, reason }) {
+function computeTransition({ prev, status, settings }) {
   const isFirstSeen = !prev;
 
-  // 최초 상태 수집 시, 이미 라이브인 경우 알림을 낼지 여부
+  // 최초 인식/재시작 때 이미 LIVE면, 옵션이 false면 알리지 않음
   if (isFirstSeen && status.isLive && !settings.notifyIfAlreadyLive) {
     return { shouldNotify: false };
   }
@@ -204,20 +216,12 @@ function computeTransition({ prev, status, settings, reason }) {
   const prevLive = !!prev?.lastIsLive;
   const nowLive = !!status.isLive;
 
-  // 오프라인 -> 온라인: 알림
+  // ✅ 오프라인 -> 라이브 전환에서만 알림
   if (!prevLive && nowLive) {
     const who = status.displayName || status.id;
     const title = `${who} 방송 시작!`;
     const message = status.title ? status.title : "라이브가 시작되었습니다.";
     return { shouldNotify: true, title, message };
-  }
-
-  // 라이브 중인데 방송 signature가 바뀐 경우(방송 재시작/다른 방송으로 전환 등)
-  // 이건 “옵션”으로 알림해도 되지만 MVP에서는 과도할 수 있어 기본 OFF.
-  // 필요하면 여기서 true로 켜면 됨.
-  if (prevLive && nowLive && prev?.lastSig && status.signature && prev.lastSig !== status.signature) {
-    // 현재는 알림 안 함
-    return { shouldNotify: false };
   }
 
   return { shouldNotify: false };
@@ -226,8 +230,6 @@ function computeTransition({ prev, status, settings, reason }) {
 async function safeFetchStatus(item, settings, prev) {
   try {
     const result = await withTimeout(fetchStatus(item), settings.requestTimeoutMs);
-
-    // 공통 필드 보정
     return {
       platform: item.platform,
       id: item.id,
@@ -236,21 +238,19 @@ async function safeFetchStatus(item, settings, prev) {
       isLive: !!result.isLive,
       title: result.title || "",
       signature: result.signature || (result.isLive ? "LIVE" : "OFF"),
-      url: result.url || buildDefaultUrl(item)
+      url: result.url || buildDefaultUrl(item),
     };
   } catch (e) {
-    // 실패 시: 이전 상태를 유지하기 위해 OFF로 만들지 않고 "unknown"처럼 처리할 수도 있으나,
-    // MVP에서는 단순하게 OFF로 취급하지 않고 "상태 불명"으로 저장만 갱신.
+    // ✅ 실패 시 이전 상태 유지(OFF 오판으로 중복 알림 방지)
     return {
       platform: item.platform,
       id: item.id,
       key: item.key,
       displayName: item.name || "",
-      // 실패 시 이전 상태 유지(중복 알림 방지)
       isLive: !!prev?.lastIsLive,
       title: prev?.lastTitle || "",
       signature: prev?.lastSig || "UNKNOWN",
-      url: buildDefaultUrl(item)
+      url: buildDefaultUrl(item),
     };
   }
 }
@@ -267,11 +267,11 @@ async function fetchStatus(item) {
   throw new Error(`unknown platform: ${item.platform}`);
 }
 
+/** CHZZK: live-status */
 async function fetchChzzk(channelId) {
-  // v2 시도 -> 실패하면 v1
   const urls = [
     `https://api.chzzk.naver.com/polling/v2/channels/${channelId}/live-status`,
-    `https://api.chzzk.naver.com/polling/v1/channels/${channelId}/live-status`
+    `https://api.chzzk.naver.com/polling/v1/channels/${channelId}/live-status`,
   ];
 
   let lastErr = null;
@@ -288,12 +288,7 @@ async function fetchChzzk(channelId) {
       const title = content.liveTitle || "";
       const signature = isLive ? `OPEN:${title}` : "OFF";
 
-      return {
-        isLive,
-        title,
-        signature,
-        url: `https://chzzk.naver.com/live/${channelId}`
-      };
+      return { isLive, title, signature, url: `https://chzzk.naver.com/live/${channelId}` };
     } catch (e) {
       lastErr = e;
     }
@@ -302,10 +297,9 @@ async function fetchChzzk(channelId) {
   throw lastErr || new Error("CHZZK fetch failed");
 }
 
+/** SOOP: player_live_api.php */
 async function fetchSoop(streamerId) {
-  // soop-extension 방식과 동일한 기본 body (bid + options)
   const url = `https://live.sooplive.co.kr/afreeca/player_live_api.php?bjid=${encodeURIComponent(streamerId)}`;
-
   const body = new URLSearchParams({
     bid: streamerId,
     type: "live",
@@ -315,67 +309,201 @@ async function fetchSoop(streamerId) {
     quality: "HD",
     mode: "landing",
     from_api: "0",
-    is_revive: "false"
+    is_revive: "false",
   });
 
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString()
+    body: body.toString(),
   });
 
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
   const json = await res.json();
   const ch = json?.CHANNEL || {};
-
   const resultCode = Number(ch.RESULT);
-  const isLive = resultCode === 1;
 
+  const isLive = resultCode === 1;
   const title = ch.TITLE || "";
   const bno = ch.BNO || ch.PBNO || "";
   const signature = isLive ? `LIVE:${bno || title}` : "OFF";
 
-  return {
-    isLive,
-    title,
-    signature,
-    url: `https://play.sooplive.co.kr/${streamerId}`
-  };
+  return { isLive, title, signature, url: `https://play.sooplive.co.kr/${streamerId}` };
 }
 
-async function notify({ title, message, url }) {
+/** ✅ 알림: 프로필 아이콘 시도 -> 실패 시 기본 아이콘 폴백 */
+async function notify({ title, message, url, iconUrl }) {
   const notificationId = `live:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-  chrome.runtime.getURL("icons/icon128.png");
 
-  const createdId = await new Promise((resolve) => {
+  // 1) 먼저 전달된 아이콘(프로필 등)로 시도
+  let createdId = await createNotification({
+    notificationId,
+    title,
+    message,
+    iconUrl: iconUrl || DEFAULT_ICON_URL,
+  });
+
+  // 2) 이미지 다운로드 실패 등으로 create가 실패하면 기본 아이콘으로 재시도
+  if (!createdId && iconUrl && iconUrl !== DEFAULT_ICON_URL) {
+    createdId = await createNotification({
+      notificationId,
+      title,
+      message,
+      iconUrl: DEFAULT_ICON_URL,
+    });
+  }
+
+  if (!createdId) return;
+
+  await upsertNotifMap(createdId, url);
+}
+
+async function createNotification({ notificationId, title, message, iconUrl }) {
+  return await new Promise((resolve) => {
     chrome.notifications.create(
       notificationId,
       {
         type: "basic",
         iconUrl,
         title,
-        message: message || ""
+        message: message || "",
       },
       (id) => {
         if (chrome.runtime.lastError) {
           console.error("[notify] create failed:", chrome.runtime.lastError.message);
           resolve(null);
-        } else {
-          console.log("[notify] created:", id);
-          resolve(id);
+          return;
         }
+        console.log("[notify] created:", id);
+        resolve(id);
       }
     );
   });
-
-  if (!createdId) return;
-
-  const { notifMap = {} } = await chrome.storage.local.get(["notifMap"]);
-  notifMap[createdId] = { url };
-  await chrome.storage.local.set({ notifMap });
 }
 
+/** notifMap: 동시성 안전 업데이트 */
+async function withNotifMapLock(fn) {
+  notifMapMutex = notifMapMutex.then(
+    async () => {
+      try {
+        await fn();
+      } catch (e) {
+        console.warn("[notifMap] lock fn failed:", String(e?.message || e));
+      }
+    },
+    async () => {
+      try {
+        await fn();
+      } catch (e) {
+        console.warn("[notifMap] lock fn failed:", String(e?.message || e));
+      }
+    }
+  );
+  await notifMapMutex;
+}
+
+async function upsertNotifMap(notificationId, url) {
+  await withNotifMapLock(async () => {
+    const { [STORAGE_KEYS.notifMap]: notifMap = {} } = await chrome.storage.local.get([STORAGE_KEYS.notifMap]);
+    notifMap[notificationId] = { url };
+    await chrome.storage.local.set({ [STORAGE_KEYS.notifMap]: notifMap });
+  });
+}
+
+async function getNotifMapEntry(notificationId) {
+  const { [STORAGE_KEYS.notifMap]: notifMap = {} } = await chrome.storage.local.get([STORAGE_KEYS.notifMap]);
+  return notifMap[notificationId] || null;
+}
+
+async function deleteNotifMapEntry(notificationId) {
+  await withNotifMapLock(async () => {
+    const { [STORAGE_KEYS.notifMap]: notifMap = {} } = await chrome.storage.local.get([STORAGE_KEYS.notifMap]);
+    if (notifMap[notificationId]) {
+      delete notifMap[notificationId];
+      await chrome.storage.local.set({ [STORAGE_KEYS.notifMap]: notifMap });
+    }
+  });
+}
+
+/** ✅ 스트리머 프로필 이미지 URL 가져오기 + 캐시 */
+async function getAvatarIconUrl(item, avatarCache) {
+  try {
+    const cached = avatarCache[item.key];
+    const now = Date.now();
+
+    if (cached?.url && cached?.fetchedAt && now - cached.fetchedAt < AVATAR_CACHE_TTL_MS) {
+      return cached.url;
+    }
+
+    let url = null;
+
+    if (item.platform === "chzzk") url = await fetchChzzkAvatarUrl(item.id);
+    if (item.platform === "soop") url = await fetchSoopAvatarUrl(item.id);
+
+    if (url) {
+      avatarCache[item.key] = { url, fetchedAt: now };
+      return url;
+    }
+
+    return null;
+  } catch (e) {
+    console.warn("[avatar] failed:", String(e?.message || e));
+    return null;
+  }
+}
+
+/** CHZZK: channel info -> channelImageUrl */
+async function fetchChzzkAvatarUrl(channelId) {
+  const res = await fetch(`https://api.chzzk.naver.com/service/v1/channels/${channelId}`);
+  if (!res.ok) throw new Error(`CHZZK channel info HTTP ${res.status}`);
+
+  const json = await res.json();
+  const content = json?.content || {};
+  const img = content.channelImageUrl;
+  if (!img) return null;
+
+  return String(img);
+}
+
+/** SOOP: station page HTML og:image */
+async function fetchSoopAvatarUrl(bjid) {
+  const res = await fetch(`https://play.sooplive.co.kr/${encodeURIComponent(bjid)}`);
+  if (!res.ok) throw new Error(`SOOP station HTML HTTP ${res.status}`);
+
+  const html = await res.text();
+
+  const m1 = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+  const m2 = html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+  const url = (m1?.[1] || m2?.[1] || "").trim();
+
+  if (!url) return null;
+  if (url.startsWith("//")) return `https:${url}`;
+  return url;
+}
+
+/** 동시성 제한 map(pool) */
+async function mapPool(items, limit, fn) {
+  const results = new Array(items.length);
+  let idx = 0;
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = idx++;
+      if (i >= items.length) break;
+      try {
+        results[i] = await fn(items[i], i);
+      } catch {
+        results[i] = null;
+      }
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+/** 단순 타임아웃 래퍼(AbortController 미사용) */
 function withTimeout(promise, ms) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error("timeout")), ms);

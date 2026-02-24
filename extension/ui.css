@@ -81,6 +81,12 @@ input, select{
   padding:10px 10px;
   border-radius:12px;
   outline:none;
+  color-scheme: dark;
+}
+
+select option, select optgroup{
+    background: #ffffff;
+    color: #0b1020;
 }
 
 input::placeholder{ color:rgba(168,176,214,.7); }
@@ -146,18 +152,18 @@ code{
 .pill .dot{ width:8px; height:8px; border-radius:999px; background:var(--muted); }
 
 .pill.chzzk{
-  color:#a3c7ff;
-  border-color:rgba(163,199,255,.33);
-  background:rgba(163,199,255,.08);
+  color:#7CF0B2;
+  border-color:rgba(124,240,178,.33);
+  background:rgba(124,240,178,.10);
 }
-.pill.chzzk .dot{ background:#a3c7ff; }
+.pill.chzzk .dot{ background:#7CF0B2; }
 
 .pill.soop{
-  color:#b7f7d6;
-  border-color:rgba(183,247,214,.33);
-  background:rgba(183,247,214,.08);
+  color:#86B7FF;
+  border-color:rgba(134,183,255,.33);
+  background:rgba(134,183,255,.10);
 }
-.pill.soop .dot{ background:#b7f7d6; }
+.pill.soop .dot{ background:#86B7FF; }
 
 .status{
   font-weight:900;
