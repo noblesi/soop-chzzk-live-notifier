@@ -14,14 +14,16 @@
   },
   "options_page": "options.html",
   "background": { "service_worker": "service_worker.js" },
+
   "permissions": ["storage", "alarms", "notifications"],
+
   "host_permissions": [
     "https://api.chzzk.naver.com/*",
+    "https://*.pstatic.net/*",
     "https://live.sooplive.co.kr/*",
-    "https://chapi.sooplive.co.kr/*",
-    "https://chzzk.naver.com/*",
     "https://play.sooplive.co.kr/*"
   ],
+
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",

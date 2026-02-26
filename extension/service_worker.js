@@ -21,11 +21,15 @@ const STORAGE_KEYS = {
   state: "state",         // key -> { lastIsLive, lastSig, lastTitle, updatedAt }
   notified: "notified",   // key -> { lastNotifiedSig, lastNotifiedAt }
   notifMap: "notifMap",   // notificationId -> { url }
-  avatarCache: "avatarCache", // key -> { url, fetchedAt }
+  // key -> { url, fetchedAt, dataUrl, dataFetchedAt }
+  // - url: 플랫폼에서 얻은 원본 프로필 이미지 URL(원격)
+  // - dataUrl: notifications.iconUrl에 안정적으로 넣기 위한 data: URL(권장)
+  avatarCache: "avatarCache",
 };
 
 const DEFAULT_ICON_URL = chrome.runtime.getURL("icons/icon128.png");
 const AVATAR_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const AVATAR_ICON_MAX_BYTES = 512 * 1024; // 너무 큰 이미지는 dataUrl로 변환/저장하지 않음
 
 // ✅ 폴링 동시성(너무 높이면 API에 부담)
 const POLL_CONCURRENCY = 4;
@@ -41,6 +45,56 @@ function clampInt(n, min, max) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * ✅ 알림 아이콘용: 이미지 URL -> data URL
+ *
+ * 최신 MV3/Chrome 환경에서 notifications.create(iconUrl)에 원격 URL을 직접 넣으면
+ * "Unable to download all specified images" 에러가 발생할 수 있습니다.
+ * 서비스워커에서 이미지를 fetch하여 data: URL로 변환해 넣는 방식이 가장 안정적입니다.
+ */
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 8192; // call stack 방지
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function fetchImageAsDataUrl(imageUrl, { timeoutMs = 5000 } = {}) {
+  if (!imageUrl) return null;
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
+  try {
+    // ✅ 쿠키/세션을 사용하지 않음(최소 권한/보안 원칙)
+    const res = await fetch(imageUrl, {
+      signal: ctrl.signal,
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+    });
+    if (!res.ok) throw new Error(`image HTTP ${res.status}`);
+
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    if (contentType && !contentType.startsWith("image/")) {
+      throw new Error(`not an image: ${contentType}`);
+    }
+
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > AVATAR_ICON_MAX_BYTES) {
+      throw new Error(`image too large: ${buf.byteLength} bytes`);
+    }
+
+    const b64 = arrayBufferToBase64(buf);
+    return `data:${contentType || "image/png"};base64,${b64}`;
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 async function getSettings() {
@@ -429,24 +483,33 @@ async function deleteNotifMapEntry(notificationId) {
 /** ✅ 스트리머 프로필 이미지 URL 가져오기 + 캐시 */
 async function getAvatarIconUrl(item, avatarCache) {
   try {
-    const cached = avatarCache[item.key];
+    const cached = avatarCache[item.key] || {};
     const now = Date.now();
 
-    if (cached?.url && cached?.fetchedAt && now - cached.fetchedAt < AVATAR_CACHE_TTL_MS) {
-      return cached.url;
+    // 1) dataUrl 캐시(알림 iconUrl에 그대로 사용)
+    if (cached.dataUrl && cached.dataFetchedAt && now - cached.dataFetchedAt < AVATAR_CACHE_TTL_MS) {
+      return cached.dataUrl;
     }
 
+    // 2) 프로필 원본 URL 캐시(플랫폼 API/HTML에서 얻은 값)
     let url = null;
+    if (cached.url && cached.fetchedAt && now - cached.fetchedAt < AVATAR_CACHE_TTL_MS) {
+      url = cached.url;
+    } else {
+      if (item.platform === "chzzk") url = await fetchChzzkAvatarUrl(item.id);
+      if (item.platform === "soop") url = await fetchSoopAvatarUrl(item.id);
 
-    if (item.platform === "chzzk") url = await fetchChzzkAvatarUrl(item.id);
-    if (item.platform === "soop") url = await fetchSoopAvatarUrl(item.id);
-
-    if (url) {
-      avatarCache[item.key] = { url, fetchedAt: now };
-      return url;
+      if (url) avatarCache[item.key] = { ...cached, url, fetchedAt: now };
     }
 
-    return null;
+    if (!url) return null;
+
+    // 3) 원격 URL -> data URL 변환 (이게 되어야 notifications.create가 안정적으로 성공)
+    const dataUrl = await fetchImageAsDataUrl(url, { timeoutMs: 5000 });
+    if (!dataUrl) return null;
+
+    avatarCache[item.key] = { ...(avatarCache[item.key] || cached), dataUrl, dataFetchedAt: now };
+    return dataUrl;
   } catch (e) {
     console.warn("[avatar] failed:", String(e?.message || e));
     return null;
